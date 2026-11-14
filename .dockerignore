@@ -1,0 +1,11 @@
+.venv
+.git
+.github
+out
+models
+tests
+**/__pycache__
+*.mp4
+*.gpx
+*.key
+*.evidence.json

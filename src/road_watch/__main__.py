@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,9 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("scan", help="detect violations in a video or image")
     s.add_argument("video", type=Path)
-    s.add_argument("--model", type=Path, default=Path("models/yolo11n.onnx"))
+    s.add_argument("--model", type=Path,
+                   default=Path(os.environ.get("ROAD_WATCH_MODEL", "models/yolo11n.onnx")),
+                   help="ONNX detector (default: $ROAD_WATCH_MODEL or models/yolo11n.onnx)")
     s.add_argument("--helmet-model", type=Path)
     s.add_argument("--out", type=Path, default=Path("out"))
     s.add_argument("--gpx", type=Path)
