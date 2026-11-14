@@ -78,3 +78,14 @@ def test_aggregate_drops_sparse_cells():
     b = hotspot_event("triple_riding", 17.36, 78.47, T0)
     agg = aggregate([a, a, dict(a, violation="triple_riding"), b], min_count=3)
     assert agg == {a["cell"]: {"no_helmet": 2, "triple_riding": 1}}
+
+
+def test_malformed_points_are_skipped(tmp_path):
+    p = tmp_path / "bad.gpx"
+    p.write_text("""<gpx><trk><trkseg>
+      <trkpt lat="17.43" lon="78.34"><time>not a time</time></trkpt>
+      <trkpt lon="78.34"><time>2026-11-14T04:30:00Z</time></trkpt>
+      <trkpt lat="917.43" lon="78.34"><time>2026-11-14T04:30:05Z</time></trkpt>
+      <trkpt lat="17.44" lon="78.34"><time>2026-11-14T04:30:10Z</time></trkpt>
+    </trkseg></trk></gpx>""")
+    assert [f.lat for f in load_gpx(p)] == [17.44]

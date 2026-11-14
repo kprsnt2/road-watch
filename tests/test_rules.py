@@ -91,3 +91,37 @@ def test_two_bikes_tracked_separately():
     events = run(frames)
     assert {e.violation for e in events} == {"triple_riding", "no_helmet"}
     assert len({e.track_id for e in events}) == 2
+
+
+def test_sparse_frame_numbers_keep_the_track():
+    # A 60 fps video sampled at 5 fps hands over frames 0, 12, 24, ...
+    t = ViolationTracker(window=5, min_hits=3)
+    events = []
+    for k in range(5):
+        events += t.update(k * 12, k / 5, frame_with(3))
+    assert [e.frame for e in events if e.violation == "triple_riding"] == [24]
+
+
+def test_one_missed_detection_does_not_reset_the_track():
+    t = ViolationTracker(window=5, min_hits=3)
+    events = []
+    for k in range(5):
+        events += t.update(k * 6, k / 5, [] if k == 1 else frame_with(3))
+    assert [(e.frame, e.track_id) for e in events] == [(18, 1)]
+
+
+def test_track_dropped_after_max_gap():
+    t = ViolationTracker(window=5, min_hits=3, max_gap=2)
+    frames = [frame_with(3)] * 2 + [[]] * 3 + [frame_with(3)] * 2
+    assert run(frames, t) == []   # 2 + 2 sightings, but not of the same track
+
+
+def test_duplicate_box_does_not_steal_the_track():
+    b = bike()
+    shifted = Box(b.x1 + 30, b.y1, b.x2 + 30, b.y2, "motorcycle", 0.4)
+    t = ViolationTracker()
+    t.update(0, 0.0, [b])
+    t.update(1, 0.1, [shifted, b])
+    first = next(tr for tr in t._tracks if tr.id == 1)
+    assert first.box == b
+    assert len(t._tracks) == 2

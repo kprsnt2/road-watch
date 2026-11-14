@@ -46,7 +46,8 @@ class Fix:
 
 
 def load_gpx(path: Path) -> list[Fix]:
-    """Read track points (trkpt) with timestamps, sorted by time."""
+    """Read track points (trkpt) with timestamps, sorted by time. Points without a
+    usable time or position are skipped."""
     root = ET.parse(Path(path)).getroot()
     fixes = []
     for el in root.iter():
@@ -55,10 +56,16 @@ def load_gpx(path: Path) -> list[Fix]:
         t_el = next((c for c in el if c.tag.rsplit("}", 1)[-1] == "time"), None)
         if t_el is None or not t_el.text:
             continue
-        t = datetime.fromisoformat(t_el.text.strip().replace("Z", "+00:00"))
+        try:
+            t = datetime.fromisoformat(t_el.text.strip().replace("Z", "+00:00"))
+            lat, lon = float(el.attrib["lat"]), float(el.attrib["lon"])
+        except (ValueError, KeyError):
+            continue  # one malformed point shouldn't lose the whole track
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            continue
         if t.tzinfo is None:
             t = t.replace(tzinfo=timezone.utc)
-        fixes.append(Fix(t, float(el.attrib["lat"]), float(el.attrib["lon"])))
+        fixes.append(Fix(t, lat, lon))
     fixes.sort(key=lambda f: f.t)
     return fixes
 

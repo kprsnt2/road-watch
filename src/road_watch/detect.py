@@ -57,6 +57,17 @@ class YoloOnnx:
         self.names = {int(k): rename.get(v, v) for k, v in names.items()}
         self.keep = keep
         self.conf, self.iou = conf, iou
+        self._wanted = None
+        if keep is not None:
+            missing = sorted(keep - set(self.names.values()))
+            if missing:
+                # Otherwise every detection is filtered out and the scan reports
+                # "0 violations" for a model that could never have found any.
+                raise ValueError(
+                    f"{model_path}: model has no class {', '.join(missing)}; "
+                    f"its classes are: {', '.join(sorted(self.names.values())) or '(no names in metadata)'}"
+                )
+            self._wanted = [i for i, n in self.names.items() if n in keep]
 
     def _letterbox(self, img: np.ndarray):
         h, w = img.shape[:2]
@@ -77,9 +88,8 @@ class YoloOnnx:
         cls = scores_all.argmax(1)
         scores = scores_all[np.arange(len(cls)), cls]
         mask = scores >= self.conf
-        if self.keep is not None:
-            wanted = [i for i, n in self.names.items() if n in self.keep]
-            mask &= np.isin(cls, wanted)
+        if self._wanted is not None:
+            mask &= np.isin(cls, self._wanted)
         out, cls, scores = out[mask], cls[mask], scores[mask]
         if not len(out):
             return []

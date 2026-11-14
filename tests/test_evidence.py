@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -80,3 +81,30 @@ def test_digest_is_stable(setup):
     _, manifest, *_ = setup
     assert manifest_digest(manifest) == manifest_digest(manifest)
     assert len(manifest_digest(manifest)) == 64
+
+
+def test_trusted_key_comparison_ignores_whitespace(setup):
+    video, _, key, _ = setup
+    assert verify(video, trusted_public_key_b64=public_key_b64(key) + "\n").ok
+
+
+def test_verification_reports_signer(setup):
+    video, _, key, _ = setup
+    assert verify(video).signer == public_key_b64(key)
+
+
+@pytest.mark.parametrize("drop", ["video", "public_key"])
+def test_incomplete_manifest_fails_cleanly(setup, drop):
+    video, manifest, *_ = setup
+    m = json.loads(manifest.read_text())
+    del m["body"][drop]
+    manifest.write_text(json.dumps(m))
+    result = verify(video)
+    assert not result.ok
+    assert "manifest unreadable" in result.problems[0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_key_file_is_owner_only(setup):
+    *_, key_path = setup
+    assert key_path.stat().st_mode & 0o077 == 0

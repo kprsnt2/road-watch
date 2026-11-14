@@ -17,7 +17,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv sync --extra detect
+      - run: uv sync --locked --extra detect
       - run: uv run python -m pytest -q
 
   image:

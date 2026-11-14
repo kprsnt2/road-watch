@@ -100,7 +100,7 @@ def head_without_helmet(rider: Box, heads: list[Box]) -> bool:
 class _Track:
     id: int
     box: Box
-    last_frame: int
+    last_seen: int       # tracker tick (count of update() calls), not a video frame number
     history: dict[str, deque] = field(default_factory=dict)
     fired: set[str] = field(default_factory=set)
 
@@ -133,35 +133,49 @@ class ViolationTracker:
         self.window, self.min_hits, self.match_iou, self.max_gap = window, min_hits, match_iou, max_gap
         self._tracks: list[_Track] = []
         self._next_id = 1
+        self._tick = 0
 
-    def _match(self, bike: Box, frame: int) -> _Track:
-        best, best_iou = None, self.match_iou
-        for t in self._tracks:
-            if frame - t.last_frame > self.max_gap:
+    def _match_all(self, bikes: list[Box]) -> list[_Track]:
+        """One track per bike box, one bike box per track: best IoU pairs first,
+        leftover boxes start new tracks."""
+        pairs = sorted(
+            ((iou(t.box, b), ti, bi) for ti, t in enumerate(self._tracks) for bi, b in enumerate(bikes)),
+            reverse=True,
+        )
+        matched: dict[int, _Track] = {}
+        taken: set[int] = set()
+        for v, ti, bi in pairs:
+            if v < self.match_iou:
+                break
+            if bi in matched or ti in taken:
                 continue
-            v = iou(t.box, bike)
-            if v >= best_iou:
-                best, best_iou = t, v
-        if best is None:
-            best = _Track(self._next_id, bike, frame)
-            self._next_id += 1
-            self._tracks.append(best)
-        best.box, best.last_frame = bike, frame
-        return best
+            matched[bi] = self._tracks[ti]
+            taken.add(ti)
+        out = []
+        for bi, bike in enumerate(bikes):
+            track = matched.get(bi)
+            if track is None:
+                track = _Track(self._next_id, bike, self._tick)
+                self._next_id += 1
+                self._tracks.append(track)
+            track.box, track.last_seen = bike, self._tick
+            out.append(track)
+        return out
 
     def update(self, frame: int, time_s: float, boxes: list[Box]) -> list[Violation]:
+        """``frame`` and ``time_s`` only label the result. A track is dropped after
+        ``max_gap`` consecutive calls without its vehicle, however far apart the
+        caller's frame numbers are (a 60 fps video sampled at 5 fps skips 12)."""
+        self._tick += 1
+        self._tracks = [t for t in self._tracks if self._tick - t.last_seen <= self.max_gap]
+
         bikes = [b for b in boxes if b.cls in self.BIKE_CLASSES]
         persons = [b for b in boxes if b.cls in self.PERSON_CLASSES]
         heads = [b for b in boxes if b.cls in self.NO_HELMET_CLASSES]
         riders_by_bike = assign_riders(bikes, persons)
 
         fired: list[Violation] = []
-        used: set[int] = set()
-        for i, bike in enumerate(bikes):
-            track = self._match(bike, frame)
-            if track.id in used:  # two boxes matched one track; treat second as new next frame
-                continue
-            used.add(track.id)
+        for i, (bike, track) in enumerate(zip(bikes, self._match_all(bikes))):
             riders = riders_by_bike[i]
             checks = {
                 "triple_riding": len(riders) >= 3,
@@ -176,6 +190,4 @@ class ViolationTracker:
                     fired.append(
                         Violation(track.id, name, frame, time_s, hits / len(hist), bike, len(riders))
                     )
-
-        self._tracks = [t for t in self._tracks if frame - t.last_frame <= self.max_gap]
         return fired

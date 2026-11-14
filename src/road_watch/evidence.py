@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,16 +57,20 @@ def _canonical(obj: dict) -> bytes:
 def generate_key(path: Path) -> Ed25519PublicKey:
     """Create a device key file. Refuses to overwrite an existing key."""
     path = Path(path)
-    if path.exists():
-        raise FileExistsError(f"{path} already exists; refusing to overwrite a device key")
     key = Ed25519PrivateKey.generate()
-    path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
     )
+    # O_EXCL: the existence check and the create are one step, so a key can't be
+    # clobbered by a race. 0o600: owner-only on POSIX (no effect on Windows).
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise FileExistsError(f"{path} already exists; refusing to overwrite a device key") from None
+    with os.fdopen(fd, "wb") as f:
+        f.write(pem)
     return key.public_key()
 
 
@@ -142,6 +147,14 @@ def manifest_digest(manifest_path: Path) -> str:
 class Verification:
     ok: bool
     problems: tuple[str, ...]
+    signer: str = ""   # public key (base64) the manifest claims to be signed with
+
+
+def _same_key(a: str, b: str) -> bool:
+    try:
+        return base64.b64decode(a, validate=True) == base64.b64decode(b.strip(), validate=True)
+    except ValueError:
+        return False
 
 
 def verify(video: Path, trusted_public_key_b64: str | None = None) -> Verification:
@@ -149,6 +162,8 @@ def verify(video: Path, trusted_public_key_b64: str | None = None) -> Verificati
 
     Pass ``trusted_public_key_b64`` (from the device's registration) to make sure
     the manifest was signed by that device and not re-signed with another key.
+    Without it, ``ok`` only means video and manifest agree with each other:
+    anyone can edit a video and seal it again with a key of their own.
     """
     video = Path(video)
     manifest_path = video.with_name(video.name + MANIFEST_SUFFIX)
@@ -160,10 +175,16 @@ def verify(video: Path, trusted_public_key_b64: str | None = None) -> Verificati
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         body, sig = manifest["body"], base64.b64decode(manifest["signature"])
         pub_b64 = body["public_key"]
+        want_bytes, want_sha = body["video"]["bytes"], body["video"]["sha256"]
+        if not isinstance(pub_b64, str):
+            raise TypeError("public_key is not text")
     except (ValueError, KeyError, TypeError) as exc:
-        return Verification(False, (f"manifest unreadable: {exc}",))
+        return Verification(False, (f"manifest unreadable: {exc!r}",))
 
-    if trusted_public_key_b64 is not None and pub_b64 != trusted_public_key_b64:
+    if body.get("version") != MANIFEST_VERSION:
+        problems.append(f"unsupported manifest version {body.get('version')!r}")
+
+    if trusted_public_key_b64 is not None and not _same_key(pub_b64, trusted_public_key_b64):
         problems.append("signed by a different device key than the trusted one")
 
     try:
@@ -174,9 +195,9 @@ def verify(video: Path, trusted_public_key_b64: str | None = None) -> Verificati
     if not video.exists():
         problems.append("video file missing")
     else:
-        if video.stat().st_size != body["video"]["bytes"]:
+        if video.stat().st_size != want_bytes:
             problems.append("video size changed")
-        if sha256_file(video) != body["video"]["sha256"]:
+        if sha256_file(video) != want_sha:
             problems.append("video content changed since sealing")
 
-    return Verification(not problems, tuple(problems))
+    return Verification(not problems, tuple(problems), pub_b64)

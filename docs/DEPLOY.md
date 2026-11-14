@@ -74,7 +74,8 @@ docker run --rm -v "$PWD:/data" ghcr.io/kprsnt2/road-watch scan ride.mp4 \
 
 Helmet models are expected to have a "no helmet" class; the common spellings
 (`Without Helmet`, `without_helmet`, `head`, `no-helmet`, `NoHelmet`) are
-mapped automatically.
+mapped automatically. A model without any of them is rejected with a list of
+the classes it does have, rather than silently finding nothing.
 
 ## 5. What not to deploy publicly
 

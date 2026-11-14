@@ -2,24 +2,26 @@
 
     python -m road_watch scan ride.mp4 --model models/yolo11n.onnx --out out/
         [--gpx ride.gpx] [--start 2026-11-14T10:00:00+05:30]
-        [--helmet-model models/helmet.onnx] [--plate-model models/plate.onnx]
+        [--helmet-model models/helmet.onnx]
         [--key device.key]   # also seal the ORIGINAL video as evidence
 
 Writes:
   out/events.jsonl       one confirmed violation per line (private: stays on device)
   out/keyframes/*.jpg    the frame where each violation was confirmed, box drawn
   out/hotspots.jsonl     anonymous records for the public map (no plate, no image)
+
+These files are rewritten on every run: use one --out folder per video.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import cv2
 
+from . import __version__
 from .detect import YoloOnnx
 from .evidence import Event, load_key, seal
 from .geo import hotspot_event, load_gpx, position_at
@@ -41,19 +43,35 @@ def _frames(path: Path, sample_fps: float):
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise SystemExit(f"cannot open video {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    step = max(1, round(fps / sample_fps))
-    i = 0
-    while True:
-        ok = cap.grab()
-        if not ok:
-            break
-        if i % step == 0:
-            ok, frame = cap.retrieve()
-            if ok:
-                yield i, i / fps, frame
-        i += 1
-    cap.release()
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        step = max(1, round(fps / sample_fps))
+        i = 0
+        while cap.grab():
+            if i % step == 0:
+                ok, frame = cap.retrieve()
+                if ok:
+                    yield i, i / fps, frame
+            i += 1
+    finally:
+        cap.release()
+
+
+def guess_start(video: Path) -> datetime:
+    """Best guess at when recording began, for when --start isn't given.
+
+    Cameras finish writing a file when recording stops, so the modified time
+    is the END of the clip; subtract the clip's length to get the start.
+    """
+    end = datetime.fromtimestamp(video.stat().st_mtime, tz=timezone.utc)
+    if video.suffix.lower() in IMAGE_EXT:
+        return end
+    cap = cv2.VideoCapture(str(video))
+    try:
+        fps, frames = cap.get(cv2.CAP_PROP_FPS), cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    finally:
+        cap.release()
+    return end - timedelta(seconds=frames / fps) if fps > 0 and frames > 0 else end
 
 
 def _draw(img, boxes: list[Box], highlight: Box, label: str):
@@ -79,8 +97,14 @@ def scan(
     min_hits: int = 3,
     key: Path | None = None,
 ) -> list[dict]:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "keyframes").mkdir(exist_ok=True)
+    if sample_fps <= 0:
+        raise ValueError("sample_fps must be positive")
+    if start is not None and start.tzinfo is None:
+        raise ValueError("start needs a UTC offset, e.g. 2026-11-14T10:00:00+05:30")
+    for what, path in (("video", video), ("model", model), ("helmet model", helmet_model),
+                       ("GPX track", gpx), ("device key", key)):
+        if path is not None and not Path(path).is_file():
+            raise FileNotFoundError(f"{what} not found: {path}")
 
     detectors = [YoloOnnx(model, keep={"person", "motorcycle"})]
     if helmet_model:
@@ -93,8 +117,12 @@ def scan(
     tracker.NO_HELMET_CLASSES = ("no_helmet",)
 
     if start is None:
-        start = datetime.fromtimestamp(video.stat().st_mtime, tz=timezone.utc)
+        start = guess_start(video)
     fixes = load_gpx(gpx) if gpx else []
+    signing_key = load_key(key) if key else None   # fail before the long scan, not after
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "keyframes").mkdir(exist_ok=True)
 
     records, evidence_events = [], []
     for frame_idx, t, img in _frames(video, sample_fps):
@@ -130,6 +158,6 @@ def scan(
             if r["lat"] is not None:
                 f.write(json.dumps(hotspot_event(r["violation"], r["lat"], r["lon"],
                                                  datetime.fromisoformat(r["time"]))) + "\n")
-    if key and records and video.suffix.lower() not in IMAGE_EXT:
-        seal(video, evidence_events, load_key(key), recorded_at=start, app_version="0.1.0")
+    if signing_key and records and video.suffix.lower() not in IMAGE_EXT:
+        seal(video, evidence_events, signing_key, recorded_at=start, app_version=__version__)
     return records

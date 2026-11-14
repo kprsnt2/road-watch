@@ -71,17 +71,19 @@ uv run python -m road_watch scan ride.mp4 --gpx ride.gpx --start 2026-11-14T10:0
 1. **Mount the phone** (dashboard or handlebar mount). Never film handheld while driving.
 2. Start a **GPS logger app** that exports **GPX** (any app with GPX export works).
 3. Record with the phone's camera or a dashcam app, landscape, 1080p is plenty.
-4. Note the **start time** of the video (or rely on the file's modified time).
+4. Note the **start time** of the video. Without `--start`, Road Watch assumes the file's
+   modified time minus the clip length — wrong if the file was copied or edited since, and
+   then GPS positions will be wrong or missing.
 5. After the ride: `scan ride.mp4 --gpx ride.gpx --start <time>`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `scan VIDEO` | Detect violations. Options: `--gpx`, `--start`, `--fps` (default 5), `--window`/`--min-hits` (default 3 of 5 frames), `--model`, `--helmet-model`, `--key`, `--out` |
+| `scan VIDEO` | Detect violations. Options: `--gpx`, `--start` (must include a UTC offset such as `+05:30`), `--fps` (default 5), `--window`/`--min-hits` (default 3 of 5 frames), `--model`, `--helmet-model`, `--key`, `--out` |
 | `plate TEXT…` | Parse and validate plate text |
 | `keygen PATH` | Create a device signing key; prints the public key |
-| `verify VIDEO [--public-key B64]` | Check a sealed video hasn't been edited or re-signed |
+| `verify VIDEO [--public-key B64]` | Check a sealed video hasn't been edited. Only with `--public-key` (printed by `keygen`) does it also prove *which device* sealed it — without it, an edited video re-sealed with another key still passes |
 
 ### Outputs of `scan`
 
@@ -89,8 +91,11 @@ uv run python -m road_watch scan ride.mp4 --gpx ride.gpx --start 2026-11-14T10:0
 |---|---|---|
 | `out/events.jsonl` | Each violation: time offset, type, riders, box, GPS | **Private** |
 | `out/keyframes/*.jpg` | The confirming frame with the vehicle boxed | **Private** — attach to an official report |
-| `out/hotspots.jsonl` | Grid cell, violation type, hour of week | Public map only |
+| `out/hotspots.jsonl` | Grid cell, violation type, hour of week, date | Public map only |
 | `VIDEO.evidence.json` | Hash + signature of the original video (with `--key`) | With the report |
+
+`events.jsonl` and `hotspots.jsonl` are rewritten on every run — use a separate
+`--out` folder per video.
 
 ## How it works
 
