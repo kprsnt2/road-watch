@@ -15,13 +15,13 @@ pull request ──► tests + build + smoke test, nothing published
 Workflow: `.github/workflows/ci.yml`. It uses the built-in `GITHUB_TOKEN`; no
 secrets to set up.
 
-### One-time step after the first publish
+### Package visibility
 
-GitHub creates new container packages as **private**. To let anyone
-`docker pull` it:
-
-1. github.com/kprsnt2 → **Packages** → `road-watch` → **Package settings**
-2. **Change visibility** → Public
+The image is linked to this public repo (via the `org.opencontainers.image.source`
+label) and is publicly pullable without login. If a fork or a renamed repo ever
+gets `denied` on `docker pull`, make the package public:
+github.com/<owner> → **Packages** → `road-watch` → **Package settings** →
+**Change visibility** → Public.
 
 ### Cutting a release
 
